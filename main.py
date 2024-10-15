@@ -1,6 +1,4 @@
 import os
-
-# Load necessary libraries for environment variables, Streamlit app, and language processing tools
 from dotenv import load_dotenv
 import streamlit as st
 from langchain_community.document_loaders import UnstructuredPDFLoader
@@ -17,11 +15,13 @@ load_dotenv()
 # Define the working directory where the script is located
 working_dir = os.path.dirname(os.path.abspath(__file__))
 
+
 # Function to load a PDF document using UnstructuredPDFLoader
 def load_document(file_path):
     loader = UnstructuredPDFLoader(file_path)
     documents = loader.load()  # Load and parse the PDF file
     return documents
+
 
 # Function to create a vector store for the document content
 def setup_vectorstore(documents):
@@ -35,27 +35,20 @@ def setup_vectorstore(documents):
     vectorstore = FAISS.from_documents(doc_chunks, embeddings)  # Create FAISS vector store from chunks
     return vectorstore
 
-# Function to initialize the conversational chain using ChatGroq model
-def create_chain(vectorstore):
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",  # Load LLama 3.1: 8B model
-        temperature=0  # Set temperature for deterministic responses
-    )
-    retriever = vectorstore.as_retriever()  # Setup vector store as a retriever for the chain
-    memory = ConversationBufferMemory(
-        llm=llm,
-        output_key="answer",  # Set key for storing outputs in memory
-        memory_key="chat_history",  # Store chat history in memory
-        return_messages=True  # Ensure messages are returned in response
-    )
-    chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=retriever,
-        chain_type="map_reduce",  # Use 'map_reduce' chain type for processing
-        memory=memory,
-        verbose=True  # Enable verbose mode for logging
-    )
-    return chain
+
+# Function to retrieve document chunks and generate a response with the LLM
+def generate_rag_response(query, vectorstore, llm):
+    # Retrieve relevant chunks from the document
+    retriever = vectorstore.as_retriever()
+    retrieved_docs = retriever.get_relevant_documents(query)  # Retrieve relevant chunks
+
+    # Combine retrieved content to provide context for the language model
+    context = "\n\n".join(doc.page_content for doc in retrieved_docs)
+
+    # Generate response with the LLM, using retrieved content as additional context
+    response = llm.predict(f"Context:\n{context}\n\nQuestion: {query}\n\nAnswer:")
+    return response
+
 
 # Configure the Streamlit page
 st.set_page_config(
@@ -85,12 +78,12 @@ if uploaded_file:
     if "vectorstore" not in st.session_state:
         st.session_state.vectorstore = setup_vectorstore(load_document(file_path))
 
-    if "conversation_chain" not in st.session_state:
-        st.session_state.conversation_chain = create_chain(st.session_state.vectorstore)
+    if "llm" not in st.session_state:
+        st.session_state.llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
 
 # Define custom icons and styling for user and bot messages
 user_icon = "♚"  # Set custom user icon emoji
-bot_icon = "☣️"   # Set custom bot icon emoji
+bot_icon = "☣️"  # Set custom bot icon emoji
 icon_size = 25  # Set the icon size in pixels
 
 # Background color for user messages
@@ -126,12 +119,11 @@ if user_input:
     user_html = f"<div style='background-color: {user_background_color}; padding: 10px; border-radius: 8px; display: flex; align-items: center; box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1);'>{icon_html}{user_input}</div>"
     st.markdown(user_html, unsafe_allow_html=True)
 
-    # Generate bot response using the conversational chain
-    response = st.session_state.conversation_chain({"question": user_input})
-    assistant_response = response["answer"]
-    st.session_state.chat_history.append({"role": "assistant", "content": assistant_response})
+    # Generate RAG-based response using retrieved content
+    response = generate_rag_response(user_input, st.session_state.vectorstore, st.session_state.llm)
+    st.session_state.chat_history.append({"role": "assistant", "content": response})
 
     # Display bot response with icon next to the text content, left-aligned
     icon_html = f"<span style='font-size:{icon_size}px; margin-right: 10px;'>{bot_icon}</span>"
-    bot_html = f"<div style='padding: 10px 0px; display: flex; align-items: flex-start;'>{icon_html}<div>{assistant_response}</div></div>"
+    bot_html = f"<div style='padding: 10px 0px; display: flex; align-items: flex-start;'>{icon_html}<div>{response}</div></div>"
     st.markdown(bot_html, unsafe_allow_html=True)
